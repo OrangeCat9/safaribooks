@@ -16,7 +16,6 @@ from lxml import html, etree
 from multiprocessing import Process, Queue, Value
 from urllib.parse import urljoin, urlparse, parse_qs, quote_plus
 
-
 PATH = os.path.dirname(os.path.realpath(__file__))
 COOKIES_FILE = os.path.join(PATH, "cookies.json")
 
@@ -29,6 +28,8 @@ ORLY_BASE_URL = "https://www." + ORLY_BASE_HOST
 SAFARI_BASE_URL = "https://" + SAFARI_BASE_HOST
 API_ORIGIN_URL = "https://" + API_ORIGIN_HOST
 PROFILE_URL = SAFARI_BASE_URL + "/profile/"
+
+MAX_RETRIES = 3
 
 
 class Display:
@@ -113,7 +114,7 @@ class Display:
         if self.output_dir_set:
             output = (self.SH_YELLOW + "[+]" + self.SH_DEFAULT +
                       " Please delete the output directory '" + self.output_dir + "'"
-                      " and restart the program.")
+                                                                                  " and restart the program.")
             self.out(output)
 
         output = self.SH_BG_RED + "[!]" + self.SH_DEFAULT + " Aborting..."
@@ -202,8 +203,8 @@ class Display:
         else:
             os.remove(COOKIES_FILE)
             message += "Out-of-Session%s.\n" % (" (%s)" % response["detail"]) if "detail" in response else "" + \
-                       Display.SH_YELLOW + "[+]" + Display.SH_DEFAULT + \
-                       " Use the `--cred` or `--login` options in order to perform the auth login to Safari."
+                                                                                                           Display.SH_YELLOW + "[+]" + Display.SH_DEFAULT + \
+                                                                                                           " Use the `--cred` or `--login` options in order to perform the auth login to Safari."
 
         return message
 
@@ -410,26 +411,29 @@ class SafariBooks:
                 self.session.cookies.set(cookie_key, cookie_value)
 
     def requests_provider(self, url, is_post=False, data=None, perform_redirect=True, **kwargs):
-        try:
-            response = getattr(self.session, "post" if is_post else "get")(
-                url,
-                data=data,
-                allow_redirects=False,
-                **kwargs
-            )
-
-            self.handle_cookie_update(response.raw.headers.getlist("Set-Cookie"))
-
-            self.display.last_request = (
-                url, data, kwargs, response.status_code, "\n".join(
-                    ["\t{}: {}".format(*h) for h in response.headers.items()]
-                ), response.text
-            )
-
-        except (requests.ConnectionError, requests.ConnectTimeout, requests.RequestException) as request_exception:
-            self.display.error(str(request_exception))
+        for i in range(MAX_RETRIES):
+            try:
+                response = getattr(self.session, "post" if is_post else "get")(
+                    url,
+                    data=data,
+                    allow_redirects=False,
+                    **kwargs
+                )
+                break
+            except (requests.ConnectionError, requests.ConnectTimeout, requests.RequestException,
+                    Exception) as request_exception:
+                self.display.info("{}: {}".format(url, request_exception))
+                self.display.info("{}: {}th retry".format(url, i + 1))
+        else:
+            self.display.error("{}: Max {} retries exceeded".format(url, MAX_RETRIES))
             return 0
 
+        self.handle_cookie_update(response.raw.headers.getlist("Set-Cookie"))
+        self.display.last_request = (
+            url, data, kwargs, response.status_code, "\n".join(
+                ["\t{}: {}".format(*h) for h in response.headers.items()]
+            ), response.text
+        )
         if response.is_redirect and perform_redirect:
             return self.requests_provider(response.next.url, is_post, None, perform_redirect)
             # TODO How about **kwargs?
@@ -816,7 +820,7 @@ class SafariBooks:
                 self.display.info(("File `%s` already exists.\n"
                                    "    If you want to download again all the CSSs,\n"
                                    "    please delete the output directory '" + self.BOOK_PATH + "'"
-                                   " and restart the program.") %
+                                                                                                 " and restart the program.") %
                                   css_file)
                 self.display.css_ad_info.value = 1
 
@@ -839,7 +843,7 @@ class SafariBooks:
                 self.display.info(("File `%s` already exists.\n"
                                    "    If you want to download again all the images,\n"
                                    "    please delete the output directory '" + self.BOOK_PATH + "'"
-                                   " and restart the program.") %
+                                                                                                 " and restart the program.") %
                                   image_name)
                 self.display.images_ad_info.value = 1
 
@@ -955,9 +959,9 @@ class SafariBooks:
             r += "<navPoint id=\"{0}\" playOrder=\"{1}\">" \
                  "<navLabel><text>{2}</text></navLabel>" \
                  "<content src=\"{3}\"/>".format(
-                    cc["fragment"] if len(cc["fragment"]) else cc["id"], c,
-                    escape(cc["label"]), cc["href"].replace(".html", ".xhtml").split("/")[-1]
-                 )
+                cc["fragment"] if len(cc["fragment"]) else cc["id"], c,
+                escape(cc["label"]), cc["href"].replace(".html", ".xhtml").split("/")[-1]
+            )
 
             if cc["children"]:
                 sr, c, mx = SafariBooks.parse_toc(cc["children"], c, mx)
